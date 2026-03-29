@@ -2,7 +2,9 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  type RepliableInteraction,
   type ChatInputCommandInteraction,
+  type MessageContextMenuCommandInteraction,
   type Message,
 } from "discord.js";
 
@@ -41,6 +43,50 @@ function truncateThreadName(value: string, maxLength: number): string {
   return `${clean.slice(0, maxLength - 1)}…`;
 }
 
+async function loadThreadMessagesFromStarter(
+  interaction: ChatInputCommandInteraction | MessageContextMenuCommandInteraction,
+  starter: Message,
+): Promise<{ thread: ThreadContext; messages: ThreadMessageInput[] }> {
+  const threadName = truncateThreadName(
+    `Ticket: ${starter.cleanContent || `${starter.author.username} ticket`}`,
+    90,
+  );
+  const thread = await starter.startThread({
+    name: threadName,
+    autoArchiveDuration: 1440,
+  });
+
+  const fetched = await thread.messages.fetch({ limit: config.threadMessageLimit });
+  const messages = fetched
+    .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
+    .map(formatMessage)
+    .filter((message): message is ThreadMessageInput => message !== null);
+
+  const starterInput = formatMessage(starter);
+  const hasStarter = starterInput
+    ? messages.some((message) => message.createdAt === starterInput.createdAt)
+    : false;
+
+  if (starterInput && !hasStarter) {
+    messages.unshift(starterInput);
+  }
+
+  if (messages.length === 0) {
+    throw new Error("No user messages were found in the new thread.");
+  }
+
+  return {
+    thread: {
+      guildId: interaction.guildId,
+      guildName: interaction.guild?.name ?? null,
+      threadId: thread.id,
+      threadName: thread.name,
+      messageCount: messages.length,
+    },
+    messages,
+  };
+}
+
 async function loadThreadMessages(
   interaction: ChatInputCommandInteraction,
 ): Promise<{ thread: ThreadContext; messages: ThreadMessageInput[] }> {
@@ -64,42 +110,7 @@ async function loadThreadMessages(
       throw new Error("No recent user message found to create a thread from.");
     }
 
-    const baseName = starter.cleanContent || `${starter.author.username} ticket`;
-    const threadName = truncateThreadName(`Ticket: ${baseName}`, 90);
-    const thread = await starter.startThread({
-      name: threadName,
-      autoArchiveDuration: 1440,
-    });
-
-    const fetched = await thread.messages.fetch({ limit: config.threadMessageLimit });
-    const messages = fetched
-      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map(formatMessage)
-      .filter((message): message is ThreadMessageInput => message !== null);
-
-    const starterInput = formatMessage(starter);
-    const hasStarter = starterInput
-      ? messages.some((message) => message.createdAt === starterInput.createdAt)
-      : false;
-
-    if (starterInput && !hasStarter) {
-      messages.unshift(starterInput);
-    }
-
-    if (messages.length === 0) {
-      throw new Error("No user messages were found in the new thread.");
-    }
-
-    return {
-      thread: {
-        guildId: interaction.guildId,
-        guildName: interaction.guild?.name ?? null,
-        threadId: thread.id,
-        threadName: thread.name,
-        messageCount: messages.length,
-      },
-      messages,
-    };
+    return loadThreadMessagesFromStarter(interaction, starter);
   }
 
   const fetched = await channel.messages.fetch({ limit: config.threadMessageLimit });
@@ -140,6 +151,29 @@ async function handleTicketCommand(interaction: ChatInputCommandInteraction): Pr
   });
 }
 
+async function handleMessageTicketCommand(
+  interaction: MessageContextMenuCommandInteraction,
+): Promise<void> {
+  await interaction.deferReply();
+
+  const starter = interaction.targetMessage;
+  if (starter.author.bot || starter.system) {
+    throw new Error("Select a user message, not a bot/system message.");
+  }
+
+  const { thread, messages } = await loadThreadMessagesFromStarter(interaction, starter);
+  const draft = await summarizeThread(thread, messages);
+  const issue = await createLinearIssue(thread, draft);
+
+  await interaction.editReply({
+    content: [
+      `Created [${issue.identifier}](${issue.url})`,
+      `**${issue.title}**`,
+    ].join("\n"),
+    allowedMentions: { parse: [] },
+  });
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -153,24 +187,31 @@ client.once(Events.ClientReady, (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== "ticket") {
-    return;
-  }
-
   try {
-    await handleTicketCommand(interaction);
+    if (interaction.isChatInputCommand() && interaction.commandName === "ticket") {
+      await handleTicketCommand(interaction);
+    } else if (
+      interaction.isMessageContextMenuCommand() &&
+      interaction.commandName === "Ticket from message"
+    ) {
+      await handleMessageTicketCommand(interaction);
+    } else {
+      return;
+    }
   } catch (error) {
     console.error(error);
 
-    const content = `Ticket creation failed: ${error instanceof Error ? error.message : "Unexpected error"}`;
-    try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({ content });
-      } else {
-        await interaction.reply({ content, ephemeral: true });
+    if (interaction.isRepliable()) {
+      const content = `Ticket creation failed: ${error instanceof Error ? error.message : "Unexpected error"}`;
+      try {
+        if ((interaction as RepliableInteraction).deferred || (interaction as RepliableInteraction).replied) {
+          await (interaction as RepliableInteraction).editReply({ content });
+        } else {
+          await (interaction as RepliableInteraction).reply({ content, ephemeral: true });
+        }
+      } catch (replyError) {
+        console.error("Failed to notify user about ticket error:", replyError);
       }
-    } catch (replyError) {
-      console.error("Failed to notify user about ticket error:", replyError);
     }
   }
 });

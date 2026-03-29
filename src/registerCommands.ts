@@ -1,11 +1,21 @@
-import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import {
+  ApplicationCommandType,
+  ContextMenuCommandBuilder,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  type RESTPostAPIApplicationCommandsJSONBody,
+} from "discord.js";
 
 import { config } from "./config.js";
 
-const commands = [
+const commands: RESTPostAPIApplicationCommandsJSONBody[] = [
   new SlashCommandBuilder()
     .setName("ticket")
     .setDescription("Summarize this thread with AI and create a Linear issue."),
+  new ContextMenuCommandBuilder()
+    .setName("Ticket from message")
+    .setType(ApplicationCommandType.Message),
 ].map((command) => command.toJSON());
 
 async function resolveApplicationId(rest: REST): Promise<string> {
