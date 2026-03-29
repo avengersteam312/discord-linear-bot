@@ -30,12 +30,76 @@ function formatMessage(message: Message): ThreadMessageInput | null {
   };
 }
 
+function truncateThreadName(value: string, maxLength: number): string {
+  const clean = value.trim();
+  if (clean.length === 0) {
+    return "Ticket";
+  }
+  if (clean.length <= maxLength) {
+    return clean;
+  }
+  return `${clean.slice(0, maxLength - 1)}…`;
+}
+
 async function loadThreadMessages(
   interaction: ChatInputCommandInteraction,
 ): Promise<{ thread: ThreadContext; messages: ThreadMessageInput[] }> {
   const channel = interaction.channel;
-  if (!channel || !channel.isThread()) {
-    throw new Error("Run `/ticket` inside a thread.");
+  if (!channel) {
+    throw new Error("This command must be used in a channel or thread.");
+  }
+
+  if (!channel.isThread()) {
+    if (!channel.isTextBased()) {
+      throw new Error("This command can only be used in text channels or threads.");
+    }
+
+    const recent = await channel.messages.fetch({ limit: config.threadMessageLimit });
+    const starter = recent
+      .filter((message) => !message.author.bot && !message.system)
+      .sort((left, right) => right.createdTimestamp - left.createdTimestamp)
+      .first();
+
+    if (!starter) {
+      throw new Error("No recent user message found to create a thread from.");
+    }
+
+    const baseName = starter.cleanContent || `${starter.author.username} ticket`;
+    const threadName = truncateThreadName(`Ticket: ${baseName}`, 90);
+    const thread = await starter.startThread({
+      name: threadName,
+      autoArchiveDuration: 1440,
+    });
+
+    const fetched = await thread.messages.fetch({ limit: config.threadMessageLimit });
+    const messages = fetched
+      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
+      .map(formatMessage)
+      .filter((message): message is ThreadMessageInput => message !== null);
+
+    const starterInput = formatMessage(starter);
+    const hasStarter = starterInput
+      ? messages.some((message) => message.createdAt === starterInput.createdAt)
+      : false;
+
+    if (starterInput && !hasStarter) {
+      messages.unshift(starterInput);
+    }
+
+    if (messages.length === 0) {
+      throw new Error("No user messages were found in the new thread.");
+    }
+
+    return {
+      thread: {
+        guildId: interaction.guildId,
+        guildName: interaction.guild?.name ?? null,
+        threadId: thread.id,
+        threadName: thread.name,
+        messageCount: messages.length,
+      },
+      messages,
+    };
   }
 
   const fetched = await channel.messages.fetch({ limit: config.threadMessageLimit });

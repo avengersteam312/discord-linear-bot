@@ -13,7 +13,7 @@ Open-source TypeScript bot for one focused workflow:
 
 ## Features
 
-- `/ticket` only works in Discord threads
+- `/ticket` works in Discord threads and in normal text channels
 - Reads the latest thread messages and ignores bot/system messages
 - Produces a structured issue draft with title, summary, reproduction, impact, and open questions
 - Creates the issue in one configured Linear team
@@ -37,6 +37,7 @@ Open-source TypeScript bot for one focused workflow:
 5. Install the bot into your server.
 6. Enable Developer Mode in Discord and copy the server ID into `DISCORD_GUILD_ID`.
 7. If your server configuration requires it, enable `Message Content Intent` on the bot page.
+8. To allow the bot to create threads from a top-level message, grant `Create Public Threads` or `Create Private Threads` in the target channel.
 
 `DISCORD_APPLICATION_ID` is optional. If omitted, the registration script resolves it from the bot token.
 
@@ -101,6 +102,7 @@ You do not need a public domain for this version because the bot connects to Dis
 - `npm test` checks draft normalization and Linear description formatting
 - `npm run check:setup` validates Discord, Linear, and OpenAI credentials
 - Run `/ticket` inside a real Discord thread to confirm end-to-end behavior
+- Run `/ticket` in a normal channel to confirm it creates a thread from the latest user message
 
 ## Security Notes
 
